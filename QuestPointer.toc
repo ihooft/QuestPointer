@@ -1,0 +1,9 @@
+## Interface: 16001
+## Title: QuestPointer
+## Notes: A stationary compass arrow for the selected quest objective.
+## Author: Isaac Hooft
+## Version: 1.1.0
+## SavedVariables: QuestPointerProfiles
+## SavedVariablesPerCharacter: QuestPointerDB
+
+QuestPointer.lua
