@@ -1,4 +1,4 @@
-QuestPointer 1.1.0 - WoW Forever (Interface 16001)
+QuestPointer 1.1.3 - WoW Forever (Interface 16001)
 
 INSTALL
 Extract QuestPointer into Interface/AddOns, replacing the existing folder.
@@ -62,3 +62,25 @@ Options > AddOns > QuestPointer is the Appearance page. Expand QuestPointer
 in the category list and select Profiles to save/load shared settings.
 Profile selection uses a native dropdown with checked selection and scrolling.
 Existing character settings and shared profiles are retained.
+
+NEW IN 1.1.1
+While dead or a ghost, the corpse takes priority over the quest. The distance
+is to the corpse and the text reads Return to your corpse. Navigation resumes
+the selected quest on resurrection. If alive with no supertracked or selected
+quest, the arrow hides automatically, reappearing when a quest is selected.
+Manual Close and Show arrow settings still apply. If the game supplies no
+corpse coordinates, the arrow dims and reports unavailable distance.
+
+NEW IN 1.1.2
+Selecting a user waypoint or built-in map pin for navigation makes the arrow
+follow that pin instead of the quest. Distance and text refer to the pin.
+Corpse navigation still takes priority while dead. When pin navigation is
+cleared, quest navigation resumes; with neither selected, the arrow hides.
+An unselected pin merely present on the map does not override the quest.
+User waypoints can fall back to their stored map coordinates if the navigation
+API has no route. Built-in pins require the game's navigation waypoint data.
+
+NEW IN 1.1.3
+Fixes map-pin errors when the client returns plain {x, y} position tables
+instead of Vector2DMixin objects. Pin, corpse and world coordinate reads
+now support both formats and safely handle unavailable coordinates.

@@ -28,6 +28,20 @@ local function PublicNumber(value)
     return not (issecretvalue and issecretvalue(value)) and type(value) == "number"
 end
 
+-- API positions may be plain x/y tables or Vector2DMixin objects.
+local function PositionXY(position)
+    if type(position) ~= "table" then return end
+    local x, y
+    if type(position.GetXY) == "function" then
+        local ok
+        ok, x, y = pcall(position.GetXY, position)
+        if not ok then return end
+    else
+        x, y = position.x, position.y
+    end
+    if PublicNumber(x) and PublicNumber(y) then return x, y end
+end
+
 local function ApplySize(size)
     db.size = math.floor(math.max(24, math.min(160, size)) + 0.5)
     arrow:SetSize(db.size, db.size)
@@ -75,8 +89,8 @@ local function Call(label, func, ...)
     end
     local function Describe(v)
         if issecretvalue and issecretvalue(v) then return "restricted" end
-        if type(v) == "table" and v.GetXY then
-            local vx, vy = v:GetXY()
+        if type(v) == "table" and (type(v.GetXY) == "function" or v.x ~= nil or v.y ~= nil) then
+            local vx, vy = PositionXY(v)
             if PublicNumber(vx) and PublicNumber(vy) then return string.format("(%.4f, %.4f)", vx, vy) end
             return "vector unavailable"
         end
@@ -188,6 +202,27 @@ local function UpdateObjectives(questID)
     objectiveText:SetText(table.concat(lines, "\n"))
 end
 
+local lastLivingMap
+local function FindCorpse(playerMap)
+    local maps, seen = {playerMap}, {[playerMap] = true}
+    if lastLivingMap and not seen[lastLivingMap] then maps[#maps + 1] = lastLivingMap; seen[lastLivingMap] = true end
+    local current = playerMap
+    for _ = 1, 4 do
+        local info = Call("Corpse map parent", C_Map and C_Map.GetMapInfo, current)
+        if type(info) ~= "table" or not PublicNumber(info.parentMapID) or info.parentMapID <= 0 or seen[info.parentMapID] then break end
+        current = info.parentMapID
+        seen[current] = true
+        maps[#maps + 1] = current
+    end
+    for _, map in ipairs(maps) do
+        local position = Call("Corpse position", C_DeathInfo and C_DeathInfo.GetCorpseMapPosition, map)
+        if position then
+            local x, y = PositionXY(position)
+            if ValidPoint(x, y) and (x ~= 0 or y ~= 0) then return map, x, y end
+        end
+    end
+end
+
 local function UpdateArrow()
     if not db then return end
     if db.closed then arrow:Hide(); return end
@@ -199,19 +234,56 @@ local function UpdateArrow()
         graphic:SetAlpha(0.4)
         arrow:Show()
     end
+    local dead = (UnitIsDeadOrGhost and UnitIsDeadOrGhost("player")) or (UnitIsDead and UnitIsDead("player")) or (UnitIsGhost and UnitIsGhost("player"))
     local tracked = Call("Supertracked quest", C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID)
     local selected = Call("Selected quest", C_QuestLog and C_QuestLog.GetSelectedQuest)
+    local userPin = Call("Selected user pin", C_SuperTrack and C_SuperTrack.IsSuperTrackingUserWaypoint) == true
+    local mapPin = Call("Selected map pin", C_SuperTrack and C_SuperTrack.IsSuperTrackingMapPin) == true
+    local pinSelected = userPin or mapPin
     local questID = tracked
     if not PublicNumber(questID) or questID <= 0 then questID = selected end
-    if not PublicNumber(questID) or questID <= 0 then
+    if not dead and not pinSelected and (not PublicNumber(questID) or questID <= 0) then
         UpdateObjectives(nil)
-        Unavailable("No active quest ID"); return
+        navigation.status = "No quest or map pin selected"
+        arrow:Hide()
+        return
     end
-    UpdateObjectives(questID)
-    navigation.questID = questID
+    if dead then
+        UpdateObjectives(nil)
+        objectiveText:SetText("Return to your corpse")
+        navigation.mode = "Corpse"
+    elseif pinSelected then
+        UpdateObjectives(nil)
+        objectiveText:SetText("Map pin")
+        navigation.mode = "Map pin"
+    else
+        UpdateObjectives(questID)
+        navigation.questID = questID
+        navigation.mode = "Quest"
+    end
     local playerMap = Call("Player map", C_Map and C_Map.GetBestMapForUnit, "player")
     if not PublicNumber(playerMap) then Unavailable("Player map unavailable"); return end
+    if not dead then lastLivingMap = playerMap end
     local mapID, x, y
+    if dead then
+        mapID, x, y = FindCorpse(playerMap)
+        navigation["Location source"] = "Corpse"
+    elseif pinSelected then
+        local label
+        x, y, label = Call("Pin navigation waypoint", C_SuperTrack and C_SuperTrack.GetNextWaypointForMap, playerMap)
+        if ValidPoint(x, y) then mapID = playerMap end
+        if not mapID and userPin then
+            local waypoint = Call("User waypoint", C_Map and C_Map.GetUserWaypoint)
+            if type(waypoint) == "table" and PublicNumber(waypoint.uiMapID) and waypoint.position then
+                x, y = PositionXY(waypoint.position)
+                if ValidPoint(x, y) then mapID = waypoint.uiMapID end
+            end
+        end
+        if not (issecretvalue and issecretvalue(label)) and type(label) == "string" and label ~= "" then
+            objectiveText:SetText(label)
+        end
+        navigation["Location source"] = "Selected map pin"
+    else
     if questID == tracked then
         x, y = Call("Supertracker waypoint", C_SuperTrack and C_SuperTrack.GetNextWaypointForMap, playerMap)
         if ValidPoint(x, y) then mapID = playerMap end
@@ -226,8 +298,9 @@ local function UpdateArrow()
     if not PublicNumber(mapID) or not ValidPoint(x, y) then
         mapID, x, y = FindQuestMapMarker(questID, playerMap)
     end
+    end
     if not PublicNumber(mapID) or not ValidPoint(x, y) then
-        Unavailable("No waypoint or map objective marker for active quest"); return
+        Unavailable(dead and "Corpse location unavailable" or pinSelected and "Selected map pin location unavailable" or "No waypoint or map objective marker for active quest"); return
     end
     navigation.target = string.format("map %d, %.4f, %.4f", mapID, x, y)
     local instance, target = Call("Objective world position", C_Map and C_Map.GetWorldPosFromMapPos,
@@ -242,8 +315,8 @@ local function UpdateArrow()
     if not PublicNumber(instance) or not PublicNumber(playerInstance) or instance ~= playerInstance then
         Unavailable("Objective and player are in different world instances"); return
     end
-    local tx, ty = target:GetXY()
-    local px, py = playerWorld:GetXY()
+    local tx, ty = PositionXY(target)
+    local px, py = PositionXY(playerWorld)
     if not PublicNumber(tx) or not PublicNumber(ty) or not PublicNumber(px) or not PublicNumber(py) then
         Unavailable("World coordinates unavailable or restricted"); return
     end
@@ -254,19 +327,19 @@ local function UpdateArrow()
     local rotation = math.atan2(west, north) - facing
     RenderDirection(rotation)
     graphic:SetAlpha(1)
-    navigation.status = "Tracking"
+    navigation.status = dead and "Tracking corpse" or pinSelected and "Tracking map pin" or "Tracking"
     navigation.rotation = string.format("%.2f degrees", rotation * 180 / math.pi)
     arrow:Show()
 end
 
 local function DebugNavigation()
     UpdateArrow()
-    local lines = {"QuestPointer 1.1.0", "Status: " .. (navigation.status or "Unknown")}
+    local lines = {"QuestPointer 1.1.3", "Status: " .. (navigation.status or "Unknown")}
     if GetBuildInfo then
         local version, build, _, interface = GetBuildInfo()
         lines[#lines + 1] = "Client: " .. tostring(version) .. ", build " .. tostring(build) .. ", interface " .. tostring(interface)
     end
-    local labels = {"Supertracked quest", "Selected quest", "questID", "Player map",
+    local labels = {"mode", "Selected user pin", "Selected map pin", "Pin navigation waypoint", "User waypoint", "Corpse position", "Supertracked quest", "Selected quest", "questID", "Player map",
         "Supertracker waypoint", "Quest waypoint on player map", "Quest next waypoint", "target",
         "Location source", "Quest UI map", "Map marker lookup", "Map quest markers",
         "Objective world position", "Player map position", "Player world position", "Player facing", "rotation"}
